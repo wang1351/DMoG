@@ -1,11 +1,6 @@
 import argparse
 import math
-
 import gym
-from scipy.stats import norm
-import numpy as np
-import torch
-
 from buffer import ReplayBuffer
 from network import *
 from utils import update_target
@@ -16,7 +11,6 @@ ZERO = 1e-8
 
 
 class BDG(object):
-
     def __init__(self, num_gaussians, num_actions, input_dim, loss, alpha, beta, eta, delta, cdf_type,
                  lr, buffer_size, batch_size, gamma):
         self.num_gaussian = num_gaussians  # with k gaussians, and the parameters are 3*k
@@ -84,34 +78,34 @@ class BDG(object):
         self.buffer.add(s, a, r, s_, float(done))
 
     def sampling_discretization(self, dis):
-        max = -999
-        min = 999
-        for i in range(len(dis)//3):
-            mean = dis[3*i+1]
-            dev = dis[3*i+2]
-            if (mean + 3*dev) > max:
-                max = mean+3*dev
-            if (mean - 3*dev) < min:
-                min = mean-3*dev
-        sampling = np.arange(min, max, (max-min)/150).tolist()
-
-        return sampling
-
-        #for i in range(len(dis)):
-        # if len(dis) % 3 != 0:
-        #     print("the length of the dis is not correct")
-        # else:
-        #     num_gauss = len(dis) // 3
-        #     for i in range(num_gauss):
-        #         if dis[3 * i] < ZERO:
-        #             continue
-        #         mean = dis[3 * i + 1]
-        #         dev = dis[3 * i + 2]
-        #         step = (self.beta * dev * 2) / self.delta
-        #         sampling = np.arange(mean - self.beta * dev, mean + self.beta * dev, step).tolist()
-        #         sampling_point.extend(sampling)
-        # sampling_point.sort()
-        #return sampling_point
+        # max = -999
+        # min = 999
+        # for i in range(len(dis)//3):
+        #     mean = dis[3*i+1]
+        #     dev = dis[3*i+2]
+        #     if (mean + 3*dev) > max:
+        #         max = mean+3*dev
+        #     if (mean - 3*dev) < min:
+        #         min = mean-3*dev
+        # sampling = np.arange(min, max, (max-min)/200).tolist()
+        #
+        # return sampling
+        sampling_point = []
+        for i in range(len(dis)):
+            if len(dis) % 3 != 0:
+                print("the length of the dis is not correct")
+            else:
+                num_gauss = len(dis) // 3
+                for i in range(num_gauss):
+                    if dis[3 * i] < ZERO:
+                        continue
+                    mean = dis[3 * i + 1]
+                    dev = dis[3 * i + 2]
+                    step = (self.beta * dev * 2) / self.delta
+                    sampling = np.arange(mean - self.beta * dev, mean + self.beta * dev, step).tolist()
+            sampling_point.extend(sampling)
+        sampling_point.sort()
+        return sampling_point
 
     def sampling_cdf_gaussian(self, sampling_points, mean, dev):
         sampling_cdf = torch.zeros(len(sampling_points))
@@ -131,34 +125,36 @@ class BDG(object):
             sampling_points = self.sampling_discretization(combine_dis.detach().cpu().numpy())
             sampling_dis_cdf = torch.zeros(len(sampling_points))
             sampling_tar_dis_cdf = torch.zeros(len(sampling_points))
+            # pdb.set_trace()
 
             for i in range (self.num_gaussian):
                 sampling_dis_cdf += dis[k, 3 * i] * self.sampling_cdf_gaussian(sampling_points,
                                                                                dis[k, 3 * i + 1], dis[k, 3 * i + 2])
-            for i in range(2*self.num_gaussian):
+            for i in range(self.num_gaussian):
                 sampling_tar_dis_cdf += tar_dis[k, 3 * i] * self.sampling_cdf_gaussian(sampling_points,
                                                                    tar_dis[k, 3 * i + 1], tar_dis[k, 3 * i + 2])
-            #pdb.set_trace()
+
             cramer_distance = torch.tensor(0.0, dtype=torch.float32, requires_grad=True)
-            quantile_distance = torch.tensor(0.0, dtype=torch.float32, requires_grad=True)
+                # pdb.set_trace()
             for i in range(len(sampling_points) - 1):
                 # # for cramer distance
+                quantile_distance = torch.tensor(0.0, dtype=torch.float32, requires_grad=True)
                 cramer_distance = cramer_distance + (sampling_dis_cdf[i] - sampling_tar_dis_cdf[i]) * (sampling_dis_cdf[i] - sampling_tar_dis_cdf[i]) * (sampling_points[i + 1] - sampling_points[i])
-                # sgn = 0
-                # if math.fabs(sampling_dis_cdf[i] - sampling_tar_dis_cdf[i]) < ZERO:
-                #     continue
-                # elif sampling_dis_cdf[i] - sampling_tar_dis_cdf[i] > ZERO:
-                #     sgn = 1
-                # else:
-                #     sgn = -1
-                # j = i
-                # quantile_square = torch.tensor(0.0, dtype=torch.float32, requires_grad=True)
-                # while abs(j) < len(sampling_tar_dis_cdf) and sgn * (sampling_dis_cdf[i] - sampling_tar_dis_cdf[j]) > 0:
-                #     quantile_square = quantile_square + sampling_dis_cdf[j] * (sampling_points[j] - sampling_points[i])
-                #     j += sgn
-                # quantile_distance = quantile_square * (sampling_dis_cdf[i + 1] - sampling_dis_cdf[i])
+                sgn = 0
+                if math.fabs(sampling_dis_cdf[i] - sampling_tar_dis_cdf[i]) < ZERO:
+                    continue
+                elif sampling_dis_cdf[i] - sampling_tar_dis_cdf[i] > ZERO:
+                    sgn = 1
+                else:
+                    sgn = -1
+                j = i
+                quantile_square = torch.tensor(0.0, dtype=torch.float32, requires_grad=True)
+                while abs(j) < len(sampling_tar_dis_cdf) and sgn * (sampling_dis_cdf[i] - sampling_tar_dis_cdf[j]) > 0:
+                    quantile_square = quantile_square + (sampling_dis_cdf[j] - sampling_dis_cdf[i]) * ((sampling_points[j] - sampling_points[i]))
+                    j += sgn
+                quantile_distance = quantile_distance + quantile_square * (sampling_dis_cdf[i + 1] - sampling_dis_cdf[i])
             loss = loss + (1 - self.eta) * cramer_distance + self.eta * quantile_distance
-            #loss = loss + cramer_distance
+            # loss = loss + cramer_distance
         return loss/self.batch_size
 
     def update(self):
@@ -209,11 +205,6 @@ class BDG(object):
                 out = torch.transpose(out.view(3, -1), 0, 1)
                 out = out.reshape(-1, self.out_dim)
             q_next = out.view(self.batch_size, -1, self.num_gaussian * 3)
-
-            # q_next = self.tar_net(b_s_).view(self.batch_size, -1, self.num_gaussian * 3)
-
-
-
             q_value = torch.zeros(self.batch_size, self.num_action)
             for j in range(self.batch_size):
                 for k in range(self.num_action):
@@ -224,7 +215,7 @@ class BDG(object):
             #q_eval or q_next??
             q_next = torch.stack([q_next[j][action_max[j]] for j in range(self.batch_size)])
 
-            q_tar = torch.zeros(self.batch_size, self.num_gaussian * 3)  #15/30??
+            q_tar = torch.zeros(self.batch_size, self.num_gaussian * 3)  #15/30?? 还没加alpha
             # smooth update
             for j in range(self.batch_size):
                 if b_done[j] == 1:
@@ -243,33 +234,11 @@ class BDG(object):
             #         q_tar[j][t] = q_next[j][t-3*self.num_gaussian]
 
 
-            for gau in range(self.num_gaussian):
-                q_tar[:, 3 * gau] *= (1 - self.alpha)
-                # q_tar[:, 3 * gau + self.num_gaussian * 3] *= self.alpha
-            # for j in range(self.batch_size):
-            #     if b_done[j] == 1:
-            #         q_tar[j][0] = 1
-            #         q_tar[j][1] = b_r[j]
-            #         q_tar[j][2] = self.min_var
-            #     else:
-            #         #???????
-            #
-            #         for z in range(self.num_gaussian*3):
-            #             q_tar[j][z] = q_next[j][z]
-            #             q_tar[j][self.num_gaussian * 3 + z] = q_next[j][z]
-            #
-            #         for gau in range(self.num_gaussian):
-            #             q_tar[j][3 * gau + 1] = b_r[j][0] + self.gamma*q_tar[j][3*gau+1] #discount factor
-            # #pdb.set_trace()
-            #
-            # #
-            # #
             # for gau in range(self.num_gaussian):
             #     q_tar[:, 3 * gau] *= (1 - self.alpha)
-            #     q_tar[:, 3 * gau + self.num_gaussian * 3] *= self.alpha
-
-            # loss = self.combined_distance(q_eval, q_tar.detach())
-            loss = self.mse(q_eval, q_tar.detach())
+                # q_tar[:, 3 * gau + self.num_gaussian * 3] *= self.alpha
+            loss = self.combined_distance(q_eval, q_tar.detach())
+            # loss = self.mse(q_eval, q_tar.detach())
             self.optimizer_mean.zero_grad()
             self.optimizer_var.zero_grad()
             self.optimizer_weight.zero_grad()
@@ -278,16 +247,9 @@ class BDG(object):
             self.optimizer_mean.step()
             self.optimizer_var.step()
             self.optimizer_weight.step()
-            #loss = self.combined_distance(q_eval, q_tar.detach())
-            # loss = self.mse(q_eval, q_tar.detach())
-            # self.optimizer.zero_grad()
-            # loss.backward()
-            #print(loss.item())
-            # self.optimizer.step()
 
 def train(config):
     env = gym.make(config.env_name)
-
     obs_dim = env.observation_space.shape[0]
     act_dim = env.action_space.n
 
@@ -339,7 +301,7 @@ if __name__ == "__main__":
     parser.add_argument("--buffer_size", type=int, default=50000, help="size of replay buffer")
     parser.add_argument("--batch_size", type=int, default=8, help="size of batch")
 
-    parser.add_argument("--num_gaussians", type=int, default=4, help="number of Gaussians for the network")
+    parser.add_argument("--num_gaussians", type=int, default=5, help="number of Gaussians for the network")
     parser.add_argument("--loss", default='cramer', help="the type of loss for the q network, cramer or quantile")
     parser.add_argument("--alpha", type=float, default=0.85, help="the smooth Bellman update parameter")
     parser.add_argument("--beta", type=float, default=3, help="the deviations considered")
