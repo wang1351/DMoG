@@ -135,10 +135,11 @@ class BDG(object):
                                                                    tar_dis[k, 3 * i + 1], tar_dis[k, 3 * i + 2])
 
             cramer_distance = torch.tensor(0.0, dtype=torch.float32, requires_grad=True)
+            quantile_distance = torch.tensor(0.0, dtype=torch.float32, requires_grad=True)
                 # pdb.set_trace()
             for i in range(len(sampling_points) - 1):
                 # # for cramer distance
-                quantile_distance = torch.tensor(0.0, dtype=torch.float32, requires_grad=True)
+
                 cramer_distance = cramer_distance + (sampling_dis_cdf[i] - sampling_tar_dis_cdf[i]) * (sampling_dis_cdf[i] - sampling_tar_dis_cdf[i]) * (sampling_points[i + 1] - sampling_points[i])
                 sgn = 0
                 if math.fabs(sampling_dis_cdf[i] - sampling_tar_dis_cdf[i]) < ZERO:
@@ -154,8 +155,9 @@ class BDG(object):
                     j += sgn
                 quantile_distance = quantile_distance + quantile_square * (sampling_dis_cdf[i + 1] - sampling_dis_cdf[i])
             loss = loss + (1 - self.eta) * cramer_distance + self.eta * quantile_distance
+            # print(loss.item())
             # loss = loss + cramer_distance
-        return loss/self.batch_size
+        return loss
 
     def update(self):
         for step in range(10):
@@ -215,7 +217,7 @@ class BDG(object):
             #q_eval or q_next??
             q_next = torch.stack([q_next[j][action_max[j]] for j in range(self.batch_size)])
 
-            q_tar = torch.zeros(self.batch_size, self.num_gaussian * 3)  #15/30?? 还没加alpha
+            q_tar = torch.zeros(self.batch_size, self.num_gaussian * 3)  # 15/30?? 还没加alpha
             # smooth update
             for j in range(self.batch_size):
                 if b_done[j] == 1:
@@ -224,26 +226,24 @@ class BDG(object):
                     q_tar[j][2] = self.min_var
                 else:
 
-                    for t in range( 3*self.num_gaussian ):
+                    for t in range(3 * self.num_gaussian):
                         q_tar[j][t] = q_next[j][t]
                     for gau in range(self.num_gaussian):
                         q_tar[j][3 * gau + 1] *= self.gamma
                         q_tar[j][3 * gau + 1] += b_r[j][0]
-            # for j in range(self.batch_size):
-            #     for t in range(3*self.num_gaussian, 2*3*self.num_gaussian):
-            #         q_tar[j][t] = q_next[j][t-3*self.num_gaussian]
 
-
+            # q_tar[:, self.num_gaussian * 3:] = q_eval
+            #
             # for gau in range(self.num_gaussian):
             #     q_tar[:, 3 * gau] *= (1 - self.alpha)
-                # q_tar[:, 3 * gau + self.num_gaussian * 3] *= self.alpha
+            #     q_tar[:, 3 * gau + self.num_gaussian * 3] *= self.alpha
             loss = self.combined_distance(q_eval, q_tar.detach())
             # loss = self.mse(q_eval, q_tar.detach())
             self.optimizer_mean.zero_grad()
             self.optimizer_var.zero_grad()
             self.optimizer_weight.zero_grad()
             loss.backward()
-            #print(loss.item())
+            print(loss.item())
             self.optimizer_mean.step()
             self.optimizer_var.step()
             self.optimizer_weight.step()
@@ -258,7 +258,7 @@ def train(config):
               buffer_size=config.buffer_size,
               batch_size=config.batch_size, gamma=config.gamma, lr=config.lr)
     score = 0.0
-    print_interval = 10
+    print_interval = 1
     for n_epi in range(int(config.max_episodes)):
         epsilon = max(0.01, 0.08 - 0.01 * (n_epi / 200))  # Linear annealing from 8% to 1%
         s = env.reset()
